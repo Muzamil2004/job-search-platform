@@ -94,7 +94,9 @@ export const forgotPassword = TryCatch(async (req, res, next) => {
         subject: "RESET Your Password - CareerLens",
         html: forgotPasswordTemplate(resetLink),
     };
-    publishToTopic("send-mail", message);
+    await publishToTopic("send-mail", message).catch((error) => {
+        console.log("failed to send message", error);
+    });
     res.json({
         message: "if that email exist, we have sent a reset link",
     });

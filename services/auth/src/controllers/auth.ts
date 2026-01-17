@@ -7,6 +7,7 @@ import axios from "axios";
 import jwt from 'jsonwebtoken';
 import { forgotPasswordTemplate } from "../template.js"
 import { publishToTopic } from "../producer.js"
+import { redisClient } from "../index.js";
 export const registerUser = TryCatch(async (req, res,next) => {
     const {name,email,password ,phoneNumber,role,bio} = req.body;
     if(!name || !email || !password || !phoneNumber || !role) {
@@ -101,14 +102,49 @@ export const forgotPassword = TryCatch(async (req, res, next) => {
         },
         process.env.JWT_SEC as string,{expiresIn:"15m"});
 
-        const resetLink = `${process.env.Frontend_URL}/reset/${resetToken}`
+        const resetLink = `${process.env.Frontend_URL}/reset/${resetToken}`;
+
+        await redisClient.set(`forgot:${email}`,resetToken,{
+            EX: 900,
+        });
+
+        await redisClient.set
         const message={
             to:email,
             subject: "RESET Your Password - CareerLens",
             html: forgotPasswordTemplate(resetLink),
         };
-        publishToTopic("send-mail",message);
+        await publishToTopic("send-mail",message).catch((error)=>{
+            console.log("failed to send message",error);
+        });
         res.json({
             message:"if that email exist, we have sent a reset link",
         }); 
+});
+
+export const resetPassword = TryCatch(async(req,res,next)=>{
+    const {token}=req.params;
+    const {password}=req.body;
+    let decoded :any;
+    try{
+        decoded =jwt.verify(token,process.env.JWT_SEC as string);
+    }catch(error){
+        throw new ErrorHandler(400,"Expired token")
+    }
+    if(decoded.type!=="reset"){
+        throw new ErrorHandler(400,"Invalid token type")
+    }
+    const email =decoded.email
+    const storedtoken =await redisClient.get(`forgot:${email}`);
+    if(!storedtoken || storedtoken !==token){
+        throw new ErrorHandler(400,"token has been expired");
+    }
+    const users=await sql `SELECT user_id  FROM users WHERE email =${email}`;
+    if(users.length ===0){
+        throw new ErrorHandler(400,"User not found");
+    }
+    const user=users[0];
+    const hashPassword =await bcrypt.hash(password,10);
+    await redisClient.del(`forgot ${email}`);
+    res.json({message:"password changed successfully"});
 });
